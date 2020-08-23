@@ -22,12 +22,14 @@ var (
 	}
 	flagRunOncePull    bool
 	flagMetricPortPull int
+	flagPullInterval   int64
 )
 
 func init() {
 	rootCmd.AddCommand(pullCmd)
 	pullCmd.PersistentFlags().BoolVar(&flagRunOncePull, "run-once", false, "Run cmd one time")
 	pullCmd.PersistentFlags().IntVarP(&flagMetricPortPull, "metrics-port", "p", 8085, "Port for metrics exporter binds on")
+	pullCmd.PersistentFlags().Int64VarP(&flagPullInterval, "interval", "i", 5, "Interval to pull data from S3 (in secconds)")
 }
 
 func pullCmdArgs(cmd *cobra.Command, args []string) error {
@@ -59,11 +61,16 @@ func pullCmdRun(cmd *cobra.Command, args []string) {
 		svcOpts = append(svcOpts, syncer.WithPrometheusRegistry(r))
 	}
 
-	svc, err := syncer.NewSyncerService(&syncer.SyncerConfig{
-		RemoteURI:  args[0],
-		LocalDir:   args[1],
-		S3Endpoint: flagS3Endpoint,
-	}, svcOpts...)
+	svc, err := syncer.NewSyncerService(
+		&syncer.SyncerConfig{
+			RemoteURI:  args[0],
+			LocalDir:   args[1],
+			TempDir:    flagTempDir,
+			S3Endpoint: flagS3Endpoint,
+			DisableSSL: flagDisableSSL,
+		},
+		svcOpts...,
+	)
 	if err != nil {
 		log.Fatal("Can't create syncer service: ", err.Error())
 	}
@@ -79,7 +86,7 @@ func pullCmdRun(cmd *cobra.Command, args []string) {
 	}
 
 	go func() {
-		interval := time.Second * 5
+		interval := time.Duration(flagPullInterval) * time.Second
 		ticker := time.NewTicker(interval)
 		for {
 			select {

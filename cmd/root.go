@@ -16,11 +16,15 @@ var (
 	}
 	flagVerbose    bool
 	flagS3Endpoint string
+	flagTempDir    string
+	flagDisableSSL bool
 )
 
 func init() {
 	rootCmd.PersistentFlags().BoolVarP(&flagVerbose, "verbose", "v", false, "Verbose output")
+	pullCmd.PersistentFlags().StringVar(&flagTempDir, "temp-dir", "tmp", "Work directory to stopre temporary files")
 	rootCmd.PersistentFlags().StringVarP(&flagS3Endpoint, "s3-endpoint", "e", "", "Custom S3 endpoint URL")
+	rootCmd.PersistentFlags().BoolVar(&flagDisableSSL, "disable-ssl", false, "Disable SSL in S3 connection")
 }
 
 func Execute() {
