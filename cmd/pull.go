@@ -23,6 +23,7 @@ var (
 	flagRunOncePull    bool
 	flagMetricPortPull int
 	flagPullInterval   int64
+	flagPullThreads    int
 )
 
 func init() {
@@ -30,6 +31,7 @@ func init() {
 	pullCmd.PersistentFlags().BoolVar(&flagRunOncePull, "run-once", false, "Run cmd one time")
 	pullCmd.PersistentFlags().IntVarP(&flagMetricPortPull, "metrics-port", "p", 8085, "Port for metrics exporter binds on")
 	pullCmd.PersistentFlags().Int64VarP(&flagPullInterval, "interval", "i", 5, "Interval to pull data from S3 (in secconds)")
+	pullCmd.PersistentFlags().IntVarP(&flagPullThreads, "threads", "t", 10, "Pull threads count")
 }
 
 func pullCmdArgs(cmd *cobra.Command, args []string) error {
@@ -79,7 +81,7 @@ func pullCmdRun(cmd *cobra.Command, args []string) {
 
 	if flagRunOncePull {
 		log.Info("Running once...")
-		if err := svc.Pull(); err != nil {
+		if err := svc.Pull(flagPullThreads); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -87,7 +89,7 @@ func pullCmdRun(cmd *cobra.Command, args []string) {
 
 	go func() {
 		// Init run
-		if err := svc.Pull(); err != nil {
+		if err := svc.Pull(flagPullThreads); err != nil {
 			log.Fatal(err)
 		}
 		// Run by interval
@@ -98,7 +100,7 @@ func pullCmdRun(cmd *cobra.Command, args []string) {
 			case <-ticker.C:
 				start := time.Now()
 				log.Info("Pull from S3 started")
-				if err := svc.Pull(); err != nil {
+				if err := svc.Pull(flagPullThreads); err != nil {
 					log.Error(err)
 				}
 				syncTime := time.Now().Sub(start)

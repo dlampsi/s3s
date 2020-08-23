@@ -11,7 +11,7 @@ import (
 )
 
 // Pulls files from S3.
-func (s *SyncerService) Pull() error {
+func (s *SyncerService) Pull(threads int) error {
 	// Temp dir
 	if err := s.createTempDir(); err != nil {
 		return err
@@ -43,9 +43,8 @@ func (s *SyncerService) Pull() error {
 	downloader := s3manager.NewDownloaderWithClient(s3svc)
 
 	// Start download workers
-	workerCnt := 10
 	var wg sync.WaitGroup
-	for i := 0; i < workerCnt; i++ {
+	for i := 0; i < threads; i++ {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
