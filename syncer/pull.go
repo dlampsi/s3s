@@ -43,7 +43,7 @@ func (s *SyncerService) Pull() error {
 	downloader := s3manager.NewDownloaderWithClient(s3svc)
 
 	// Start download workers
-	workerCnt := 5
+	workerCnt := 10
 	var wg sync.WaitGroup
 	for i := 0; i < workerCnt; i++ {
 		wg.Add(1)
