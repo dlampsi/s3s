@@ -25,29 +25,28 @@ func (s *SyncerService) InitHashCache() {
 
 			flog := log.With("file", path)
 
-			file, err := os.Open(path)
+			f, err := os.Open(path)
 			if err != nil {
 				flog.Errorw("Can't open local file for checksum calc", "err", err.Error())
-				return nil
-			}
-
-			hash := md5.New()
-			if _, err := io.Copy(hash, file); err != nil {
-				flog.Errorw("Can't calculate file checksum", "err", err.Error())
 				return nil
 			}
 
 			relPath, err := filepath.Rel(s.cfg.LocalDir, path)
 			if err != nil {
 				flog.Errorw("Can't get file relative path", "err", err.Error())
+				return nil
 			}
-			uid := hex.EncodeToString(hash.Sum(nil))
 
-			s.hashCacheLock.Lock()
-			s.hashCache[relPath] = fmt.Sprintf("\"%s\"", uid)
-			s.hashCacheLock.Unlock()
+			hash, err := s.getHash(f)
+			if err != nil {
+				flog.Errorw("Can't calculate file checksum", "err", err.Error())
+				return nil
+			}
 
-			flog.With("uid", uid).Debug("File hashCache updated")
+			s.cacheHashLock.Lock()
+			s.cacheHash[relPath] = fmt.Sprintf("\"%s\"", hash)
+			s.cacheHashLock.Unlock()
+
 			count++
 
 			return nil
@@ -169,9 +168,10 @@ func (s *SyncerService) housekeeper() error {
 		delFilesCnt int
 	)
 
-	for f := range s.deleteCache {
-		todellist = append(todellist, f)
+	for k := range s.cacheDel {
+		todellist = append(todellist, k)
 	}
+
 	log.Debugf("Found %d files to delete", len(todellist))
 
 	for _, f := range todellist {
@@ -191,4 +191,12 @@ func (s *SyncerService) housekeeper() error {
 	}
 
 	return nil
+}
+
+func (s *SyncerService) getHash(f *os.File) (string, error) {
+	h := md5.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", fmt.Errorf("can't calculate file checksum: %v", err.Error())
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }

@@ -35,16 +35,27 @@ type SyncerService struct {
 	logger *zap.Logger
 	reg    *prometheus.Registry
 
-	hashCache       map[string]string
-	hashCacheLock   *sync.Mutex
-	deleteCache     map[string]bool
-	deleteCacheLock *sync.Mutex
+	cacheHash     map[string]string
+	cacheHashLock *sync.Mutex
+	cacheDel      map[string]bool
+	cacheDelLock  *sync.Mutex
 
-	syncTaskCh    chan *syncTask
+	syncTaskCh    chan *taskData
 	syncTaskErrCh chan error
 
-	filesCnt       int
-	filesPulledCnt int
+	listedCount int
+	pulledCount int
+}
+
+type taskData struct {
+	// File S3 URI
+	uri string
+	// Local path to file
+	localPath string
+	// File md5 hash
+	hash string
+	// Relative file path
+	relPath string
 }
 
 type SyncerServiceOption func(*SyncerService)
@@ -62,12 +73,13 @@ func WithPrometheusRegistry(reg *prometheus.Registry) SyncerServiceOption {
 // Creates new s3s service for operate.
 func NewSyncerService(cfg *SyncerConfig, opts ...SyncerServiceOption) (*SyncerService, error) {
 	s := &SyncerService{
-		cfg:             cfg,
-		logger:          zap.NewNop(),
-		hashCache:       map[string]string{},
-		hashCacheLock:   &sync.Mutex{},
-		deleteCache:     map[string]bool{},
-		deleteCacheLock: &sync.Mutex{},
+		cfg:    cfg,
+		logger: zap.NewNop(),
+
+		cacheHash:     map[string]string{},
+		cacheHashLock: &sync.Mutex{},
+		cacheDel:      map[string]bool{},
+		cacheDelLock:  &sync.Mutex{},
 	}
 
 	for _, opt := range opts {
@@ -93,56 +105,4 @@ func NewSyncerService(cfg *SyncerConfig, opts ...SyncerServiceOption) (*SyncerSe
 	s.cfg.s3Prefix = s3path.path
 
 	return s, nil
-}
-
-// Pulls files from S3.
-func (s *SyncerService) Pull() error {
-	log.Info("Pull from S3")
-
-	s.filesCnt = 0
-	s.filesPulledCnt = 0
-
-	// Temp dir
-	if err := s.createTempDir(); err != nil {
-		return err
-	}
-	defer s.deleteTempDir()
-
-	// Set all files to delete cache.
-	// Files will be removed from cahce by s3ListFunc.
-	files, err := s.listDir(s.cfg.LocalDir)
-	if err != nil {
-		return fmt.Errorf("can't list local dir: %v", err)
-	}
-	log.Debugf("Listed %d files in local dir", len(files))
-	s.deleteCache = files
-	defer func() {
-		s.deleteCache = nil
-	}()
-
-	s.syncTaskCh = make(chan *syncTask, 1000)
-	s.syncTaskErrCh = make(chan error, 1000)
-
-	if err := s.s3Pull(); err != nil {
-		return err
-	}
-
-	if err := s.housekeeper(); err != nil {
-		return err
-	}
-
-	log.Infow("Pull finished", "listed", s.filesCnt, "pulled", s.filesPulledCnt)
-
-	return nil
-}
-
-type syncTask struct {
-	// File S3 URI
-	uri string
-	// Local path to file
-	localPath string
-	// File md5 hash
-	hash string
-	// Relative file path
-	relPath string
 }

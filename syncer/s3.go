@@ -8,11 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 )
@@ -65,121 +63,68 @@ func (s *SyncerService) getS3cfg() *aws.Config {
 	return cfg
 }
 
-func (s *SyncerService) s3Pull() error {
-	sess, err := session.NewSession(s.getS3cfg())
-	if err != nil {
-		return fmt.Errorf("can't create new s3 session: %v", err)
-	}
-	s3svc := s3.New(sess)
+func (s *SyncerService) procS3(page *s3.ListObjectsV2Output, lastPage bool) bool {
+	log.Debugf("Found %d objects on S3", len(page.Contents))
 
-	downloader := s3manager.NewDownloaderWithClient(s3svc)
-
-	// Start download workers
-	workerCnt := 5
-	var wg sync.WaitGroup
-	for i := 0; i < workerCnt; i++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			log.Debugw("Worker started", "id", id)
-			for t := range s.syncTaskCh {
-				s.download(t, downloader)
-			}
-			log.Debugf("Worker exited", "id", id)
-		}(i)
-	}
-
-	var pullErrMsg error
-	var wgErr sync.WaitGroup
-	wgErr.Add(1)
-
-	// FIXME: fix err ch
-	go func() {
-		defer wgErr.Done()
-		for msg := range s.syncTaskErrCh {
-			pullErrMsg = msg
-			return
+	for _, obj := range page.Contents {
+		if obj.Key == nil {
+			continue
 		}
-	}()
+		objKey := *(obj.Key)
 
-	listErr := s3svc.ListObjectsV2Pages(
-		&s3.ListObjectsV2Input{
-			Bucket: aws.String(s.cfg.s3Bucket),
-			Prefix: aws.String(s.cfg.s3Prefix),
-		},
-		func(page *s3.ListObjectsV2Output, lastPage bool) bool {
-			log.Infof("Found %d objects on S3", len(page.Contents))
-			for _, obj := range page.Contents {
-				if obj.Key == nil {
-					continue
-				}
-				objKey := *(obj.Key)
+		if strings.HasSuffix(objKey, "/") {
+			log.Debugw("Skipping directory", "key", objKey)
+			continue
+		}
 
-				if strings.HasSuffix(objKey, "/") {
-					log.Debugw("Skipping directory", "key", objKey)
-					continue
-				}
+		hash := *(obj.ETag)
+		flog := log.With("hash", hash)
 
-				hash := *(obj.ETag)
-				flog := log.With("hash", hash)
+		uri := fmt.Sprintf("s3://%s/%s", s.cfg.s3Bucket, objKey)
 
-				uri := fmt.Sprintf("s3://%s/%s", s.cfg.s3Bucket, objKey)
+		flog = flog.With("uri", uri)
 
-				flog = flog.With("uri", uri)
+		relPath, err := filepath.Rel(s.cfg.s3Prefix, objKey)
+		if err != nil {
+			flog.Debugf("Skip object %s is not the parent of %s\n", s.cfg.RemoteURI, objKey)
+			continue
+		}
+		// skip parent dir
+		if relPath == "" || relPath == "/" || relPath == "." {
+			continue
+		}
 
-				relPath, err := filepath.Rel(s.cfg.s3Prefix, objKey)
-				if err != nil {
-					flog.Debugf("Skip object %s is not the parent of %s\n", s.cfg.RemoteURI, objKey)
-					continue
-				}
-				// skip parent dir
-				if relPath == "" || relPath == "/" || relPath == "." {
-					continue
-				}
+		localPath := filepath.Join(s.cfg.LocalDir, relPath)
+		flog = flog.With("local_path", localPath)
 
-				localPath := filepath.Join(s.cfg.LocalDir, relPath)
-				flog = flog.With("local_path", localPath)
+		// Remove file from delete list.
+		s.cacheDelLock.Lock()
+		delete(s.cacheDel, localPath)
+		s.cacheDelLock.Unlock()
 
-				s.filesCnt += 1
+		s.listedCount++
 
-				// Remove file from delete list.
-				s.deleteCacheLock.Lock()
-				delete(s.deleteCache, localPath)
-				s.deleteCacheLock.Unlock()
+		s.cacheHashLock.Lock()
+		oldHash, ok := s.cacheHash[relPath]
+		s.cacheHashLock.Unlock()
 
-				// Search file in hashCache
-				s.hashCacheLock.Lock()
-				oldHash, ok := s.hashCache[relPath]
-				s.hashCacheLock.Unlock()
+		if ok && oldHash == hash {
+			continue
+		}
 
-				if ok && oldHash == hash {
-					continue
-				}
-
-				s.filesPulledCnt++
-				s.syncTaskCh <- &syncTask{
-					uri:       uri,
-					localPath: localPath,
-					hash:      hash,
-					relPath:   relPath,
-				}
-			}
-
-			return true
-		})
-
-	close(s.syncTaskCh)
-	wg.Wait()
-	close(s.syncTaskErrCh)
-
-	if listErr != nil {
-		return err
+		s.pulledCount++
+		s.syncTaskCh <- &taskData{
+			uri:       uri,
+			localPath: localPath,
+			hash:      hash,
+			relPath:   relPath,
+		}
 	}
 
-	return pullErrMsg
+	return true
 }
 
-func (s *SyncerService) download(task *syncTask, downloader *s3manager.Downloader) {
+func (s *SyncerService) download(task *taskData, downloader *s3manager.Downloader) {
 	flog := log.With("uri", task.uri, "localPath", task.localPath)
 
 	// Skip dirs
@@ -228,7 +173,7 @@ func (s *SyncerService) download(task *syncTask, downloader *s3manager.Downloade
 	}
 
 	// Update cache
-	s.hashCacheLock.Lock()
-	s.hashCache[task.localPath] = task.hash
-	s.hashCacheLock.Unlock()
+	s.cacheHashLock.Lock()
+	s.cacheHash[task.localPath] = task.hash
+	s.cacheHashLock.Unlock()
 }
