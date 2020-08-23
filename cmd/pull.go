@@ -86,19 +86,24 @@ func pullCmdRun(cmd *cobra.Command, args []string) {
 	}
 
 	go func() {
+		// Init run
+		if err := svc.Pull(); err != nil {
+			log.Fatal(err)
+		}
+		// Run by interval
 		interval := time.Duration(flagPullInterval) * time.Second
 		ticker := time.NewTicker(interval)
 		for {
 			select {
 			case <-ticker.C:
 				start := time.Now()
-				log.Debug("Pull from S3 started")
+				log.Info("Pull from S3 started")
 				if err := svc.Pull(); err != nil {
 					log.Error(err)
 				}
 				syncTime := time.Now().Sub(start)
 				// syncTimeMetric.Set(float64(syncTime / time.Millisecond))
-				log.Debugf("Pull finished in %v seconds.", syncTime)
+				log.Infof("Pull finished in %v sec.", syncTime)
 			}
 		}
 	}()
