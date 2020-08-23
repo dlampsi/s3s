@@ -1,0 +1,30 @@
+name: default
+on: 
+  push:
+    branches:    
+      - 'feature/*'
+      - 'hotfix/*'
+    paths-ignore:
+      - README.md
+      - LICENSE
+    tags-ignore:
+      - v*
+jobs:
+  build:
+    env:
+      app_name: s3s
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-18.04]
+    steps:
+      - name: Install Go 1.13
+        uses: actions/setup-go@v1
+        with:
+          go-version: 1.13
+
+      - name: Checkout repo
+        uses: actions/checkout@v1
+        
+      - name: Tests
+        run:  go test ./...
